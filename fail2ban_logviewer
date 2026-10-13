@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+import re
+import sys
+import os
+from collections import defaultdict, Counter
+
+LOG_FILE = "/var/log/fail2ban.log"
+
+def parse_fail2ban_log(file_path):
+    if not os.path.exists(file_path):
+        print(f"Xəta: '{file_path}' faylı tapılmadı.")
+        sys.exit(1)
+
+    found_counts = Counter()
+    ban_counts = Counter()
+    ip_jails = defaultdict(set)
+    ip_last_ban = {}
+
+    # Regex patterns
+    ban_pattern = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*?\[(\w+)\] Ban (\d{1,3}(?:\.\d{1,3}){3})")
+    found_pattern = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*?\[(\w+)\] Found (\d{1,3}(?:\.\d{1,3}){3})")
+
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                ban_match = ban_pattern.search(line)
+                if ban_match:
+                    timestamp, jail, ip = ban_match.groups()
+                    ban_counts[ip] += 1
+                    ip_jails[ip].add(jail)
+                    ip_last_ban[ip] = timestamp
+                    continue
+
+                found_match = found_pattern.search(line)
+                if found_match:
+                    timestamp, jail, ip = found_match.groups()
+                    found_counts[ip] += 1
+                    ip_jails[ip].add(jail)
+
+    except PermissionError:
+        print("[!] XƏBƏRDARLIQ: Log faylını oxumaq üçün skripti 'sudo' ilə işlədin!")
+        sys.exit(1)
+
+    return found_counts, ban_counts, ip_jails, ip_last_ban
+
+def main():
+    found_counts, ban_counts, ip_jails, ip_last_ban = parse_fail2ban_log(LOG_FILE)
+    all_ips = set(found_counts.keys()).union(set(ban_counts.keys()))
+
+    if not all_ips:
+        print("Log faylında heç bir hücum və ya Ban hadisəsi tapılmadı.")
+        return
+
+    print("\n" + "="*80)
+    print("                      FAIL2BAN ANALİZ HESABATI")
+    print("="*80)
+    print(f"Ümumi Hücum Cəhdi (Found): {sum(found_counts.values())}")
+    print(f"Ümumi Qoyulan Ban Sayı:    {sum(ban_counts.values())}")
+    print(f"Aşkar Edilən IP Sayı:       {len(all_ips)}")
+    print("="*80 + "\n")
+
+    print(f"{'IP ÜNVANI':<18} {'JAIL (SERVİS)':<15} {'CƏHD SAYI':<12} {'BAN SAYI':<10} {'SON BAN VAXTI'}")
+    print("-" * 80)
+
+    # Ban sayına və hücum cəhdinə görə sıralayırıq
+    sorted_ips = sorted(all_ips, key=lambda ip: (ban_counts[ip], found_counts[ip]), reverse=True)
+
+    for ip in sorted_ips:
+        jails = ",".join(ip_jails[ip]) if ip_jails[ip] else "N/A"
+        f_count = found_counts[ip]
+        b_count = ban_counts[ip]
+        last_ban = ip_last_ban.get(ip, "Ban olunmayıb")
+
+        print(f"{ip:<18} {jails:<15} {f_count:<12} {b_count:<10} {last_ban}")
+
+    print("-" * 80 + "\n")
+
+if __name__ == "__main__":
+    main()
